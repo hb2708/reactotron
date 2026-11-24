@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reactotron</title>
+    <script>
+      if (!window.process) {
+        window.process = {
+          platform: /Mac|Darwin/i.test(navigator.platform)
+            ? "darwin"
+            : /Win/i.test(navigator.platform)
+              ? "win32"
+              : "linux",
+          env: { NODE_ENV: "production" },
+        };
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.dev/config/2",
+  "productName": "Reactotron Tauri",
+  "version": "0.1.0",
+  "identifier": "com.reactotron.tauri",
+  "build": {
+    "beforeDevCommand": "yarn dev:web",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "yarn build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Reactotron Tauri",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 680,
+        "minHeight": 500,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns"
+    ]
+  }
+}

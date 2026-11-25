@@ -215,7 +215,10 @@ function Timeline() {
     setHiddenCommands,
   } = useContext(TimelineContext)
 
-  const [workerSearchHits, setWorkerSearchHits] = useState<Set<number> | null>(null)
+  const [workerSearchHits, setWorkerSearchHits] = useState<{
+    workerGeneration: number
+    ids: Set<number>
+  } | null>(null)
 
   useEffect(() => {
     const trimmed = search.trim()
@@ -224,8 +227,10 @@ function Timeline() {
       return
     }
     let cancelled = false
-    void searchCommandPayloads(trimmed, selectedClientId).then((ids) => {
-      if (!cancelled) setWorkerSearchHits(new Set(ids))
+    void searchCommandPayloads(trimmed, selectedClientId).then((res) => {
+      if (!cancelled) {
+        setWorkerSearchHits({ workerGeneration: res.workerGeneration, ids: new Set(res.ids) })
+      }
     })
     return () => {
       cancelled = true
@@ -235,13 +240,15 @@ function Timeline() {
   let filteredCommands: any[]
   try {
     const jsMatches = filterCommands(commands, search, hiddenCommands)
-    if (workerSearchHits && workerSearchHits.size > 0) {
-      const jsMatchIds = new Set(jsMatches.map((c: any) => c.messageId))
+    if (workerSearchHits && workerSearchHits.ids.size > 0) {
+      const jsMatchKeys = new Set(jsMatches.map((c: any) => getCacheKey(c)))
       const hiddenSet = new Set(hiddenCommands)
       filteredCommands = commands.filter(
         (c: any) =>
           !hiddenSet.has(c.type) &&
-          (jsMatchIds.has(c.messageId) || workerSearchHits.has(c.messageId))
+          (jsMatchKeys.has(getCacheKey(c)) ||
+            (c.workerGeneration === workerSearchHits.workerGeneration &&
+              workerSearchHits.ids.has(c.messageId)))
       )
     } else {
       filteredCommands = jsMatches
@@ -288,7 +295,8 @@ function Timeline() {
   const rowVirtualizer = useVirtualizer({
     count: filteredCommands.length,
     getScrollElement: () => scrollRef.current,
-    getItemKey: (index) => filteredCommands[index]?.messageId ?? index,
+    getItemKey: (index) =>
+      filteredCommands[index] ? getCacheKey(filteredCommands[index]) : index,
     estimateSize: () => 56,
     overscan: 8,
   })
@@ -376,7 +384,7 @@ function Timeline() {
               const command = filteredCommands[virtualRow.index]
               return (
                 <div
-                  key={command.messageId}
+                  key={getCacheKey(command)}
                   data-index={virtualRow.index}
                   ref={rowVirtualizer.measureElement}
                   style={{

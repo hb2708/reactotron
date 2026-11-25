@@ -774,10 +774,7 @@ parentPort?.on("message", async (msg: any) => {
         break
       }
       case "getCommandPayload": {
-        if (
-          typeof msg.workerGeneration === "number" &&
-          msg.workerGeneration !== config.workerGeneration
-        ) {
+        if (msg.workerGeneration !== config.workerGeneration) {
           reply(true, null)
           break
         }
@@ -785,7 +782,10 @@ parentPort?.on("message", async (msg: any) => {
         break
       }
       case "searchCommandPayloads": {
-        reply(true, searchOffloadedPayloads(String(msg.query || ""), msg.clientId || undefined))
+        reply(true, {
+          workerGeneration: config.workerGeneration,
+          ids: searchOffloadedPayloads(String(msg.query || ""), msg.clientId || undefined),
+        })
         break
       }
       case "clearPayloadStore": {
@@ -796,10 +796,7 @@ parentPort?.on("message", async (msg: any) => {
       case "hydrateExport": {
         const items = Array.isArray(msg.commands) ? msg.commands : []
         const hydrated = items.map((item: any) => {
-          if (
-            typeof item?.workerGeneration === "number" &&
-            item.workerGeneration !== config.workerGeneration
-          ) {
+          if (item?.workerGeneration !== config.workerGeneration) {
             return item
           }
           if (item?.payloadOffloaded && typeof item.messageId === "number") {

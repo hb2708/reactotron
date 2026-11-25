@@ -67,13 +67,23 @@ export interface ReactotronMcpServer {
   updateRedactionConfig: (cfg: McpRedactionServerConfig) => void
 }
 
+import {
+  startMcpServer,
+  stopMcpServer,
+  updateMcpRedactionConfig as sendMcpRedactionUpdate,
+} from "../bridge/vscodeBridge"
+
 export function createMcpServer(
   _server?: unknown,
-  _config?: McpRedactionServerConfig
+  config?: McpRedactionServerConfig
 ): ReactotronMcpServer {
   return {
-    start: () => Promise.reject(new Error("MCP server is disabled inside VS Code extension")),
-    stop: () => {},
-    updateRedactionConfig: () => {},
+    start: (port = 4567) => startMcpServer(port, config).then(() => undefined),
+    stop: () => {
+      void stopMcpServer().catch(() => {})
+    },
+    updateRedactionConfig: (cfg: McpRedactionServerConfig) => {
+      void sendMcpRedactionUpdate(cfg).catch(() => {})
+    },
   }
 }

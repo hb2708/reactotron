@@ -86,6 +86,7 @@
     "react-tooltip": "4.5.1",
     "reactotron-core-contract": "workspace:*",
     "reactotron-core-ui": "workspace:*",
+    "reactotron-mcp": "workspace:*",
     "styled-components": "^6.1.0",
     "ws": "^8.14.2"
   },

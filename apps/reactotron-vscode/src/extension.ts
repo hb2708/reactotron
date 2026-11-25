@@ -435,6 +435,29 @@ function openInspectorPanel(context: vscode.ExtensionContext) {
           respond(true, true)
           break
         }
+        case "startMcp": {
+          const res = await callWorker("startMcp", {
+            port: msg.port,
+            redactionConfig: msg.redactionConfig,
+          })
+          respond(true, res)
+          break
+        }
+        case "stopMcp": {
+          const res = await callWorker("stopMcp")
+          respond(true, res)
+          break
+        }
+        case "updateMcpRedactionConfig": {
+          await callWorker("updateMcpRedactionConfig", { redactionConfig: msg.redactionConfig })
+          respond(true, true)
+          break
+        }
+        case "getMcpState": {
+          const res = await callWorker("getMcpState")
+          respond(true, res)
+          break
+        }
         default:
           respond(false, undefined, `Unknown action: ${String(action)}`)
       }

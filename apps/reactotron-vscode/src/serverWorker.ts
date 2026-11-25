@@ -3,6 +3,11 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { parentPort, workerData } from "node:worker_threads"
+import {
+  createMcpServer,
+  type McpRedactionServerConfig,
+  type ReactotronMcpServer,
+} from "reactotron-mcp"
 import { WebSocketServer, WebSocket, type RawData } from "ws"
 
 const PAYLOAD_OFFLOAD_BYTES = 16 * 1024
@@ -41,7 +46,10 @@ let nextConnectionId = 0
 let nextMessageId = 0
 let subscriptions: string[] = []
 const sessions = new Map<string, SessionRecord>()
+const customCommands = new Map<string, any[]>()
+const commandListeners = new Set<(cmd: any) => void>()
 const socketMeta = new WeakMap<WebSocket, { connectionId: number; clientId?: string }>()
+let mcpServer: ReactotronMcpServer | null = null
 
 let wssV4: WebSocketServer | null = null
 let wssV6: WebSocketServer | null = null
@@ -355,6 +363,43 @@ function attachSocket(socket: WebSocket, remoteAddress: string) {
       if (payload && typeof payload === "object") {
         payload.name = null
       }
+    } else if (commandType === "customCommand.register" && meta.clientId) {
+      const list = customCommands.get(meta.clientId) ?? []
+      list.push({
+        id: payload?.id,
+        command: payload?.command,
+        title: payload?.title,
+        description: payload?.description,
+        args: payload?.args,
+      })
+      customCommands.set(meta.clientId, list)
+    } else if (commandType === "customCommand.unregister" && meta.clientId) {
+      const list = customCommands.get(meta.clientId) ?? []
+      customCommands.set(
+        meta.clientId,
+        list.filter((c) => c.id !== payload?.id)
+      )
+    }
+
+    if (commandListeners.size > 0) {
+      const fullCmd = {
+        type: commandType,
+        connectionId,
+        clientId: meta.clientId,
+        date: new Date(date),
+        deltaTime,
+        important,
+        messageId,
+        payload,
+        ...(diff !== undefined ? { diff } : {}),
+      }
+      for (const listener of commandListeners) {
+        try {
+          listener(fullCmd)
+        } catch {
+          // ignore listener errors
+        }
+      }
     }
 
     const encodedLen = Buffer.byteLength(text, "utf8")
@@ -390,6 +435,7 @@ function attachSocket(socket: WebSocket, remoteAddress: string) {
     const existing = sessions.get(meta.clientId)
     if (existing && existing.connectionId === connectionId) {
       sessions.delete(meta.clientId)
+      customCommands.delete(meta.clientId)
       post({ event: "disconnect", connection: existing.metadata })
     }
   })
@@ -533,6 +579,22 @@ function sendToClients(commandType: string, payload: unknown, clientId?: string)
   return sent
 }
 
+const mcpServerAdapter = {
+  get connections() {
+    return Array.from(sessions.values()).map((s) => s.metadata)
+  },
+  customCommands,
+  send(type: string, payload: unknown, clientId?: string) {
+    sendToClients(type, payload, clientId)
+  },
+  on(event: string, fn: (cmd: any) => void) {
+    if (event === "command") commandListeners.add(fn)
+  },
+  off(event: string, fn: (cmd: any) => void) {
+    if (event === "command") commandListeners.delete(fn)
+  },
+}
+
 parentPort?.on("message", async (msg: any) => {
   const { requestId, action } = msg || {}
   const reply = (ok: boolean, result?: unknown, error?: string) => {
@@ -598,7 +660,41 @@ parentPort?.on("message", async (msg: any) => {
         reply(true, { status: serverStatus, port: activePort, bindHost: config.bindHost })
         break
       }
+      case "startMcp": {
+        if (mcpServer) {
+          mcpServer.stop()
+          mcpServer = null
+        }
+        const mcpPort = typeof msg.port === "number" ? msg.port : 4567
+        const mcp = createMcpServer(
+          mcpServerAdapter as any,
+          msg.redactionConfig as Partial<McpRedactionServerConfig> | undefined
+        )
+        await mcp.start(mcpPort)
+        mcpServer = mcp
+        reply(true, { started: true, port: mcp.port })
+        break
+      }
+      case "stopMcp": {
+        mcpServer?.stop()
+        mcpServer = null
+        reply(true, { started: false, port: null })
+        break
+      }
+      case "updateMcpRedactionConfig": {
+        if (mcpServer && msg.redactionConfig) {
+          mcpServer.updateRedactionConfig(msg.redactionConfig as Partial<McpRedactionServerConfig>)
+        }
+        reply(true, true)
+        break
+      }
+      case "getMcpState": {
+        reply(true, { started: Boolean(mcpServer?.started), port: mcpServer?.port ?? null })
+        break
+      }
       case "shutdown": {
+        mcpServer?.stop()
+        mcpServer = null
         await stopServers()
         cleanupPayloadFile()
         reply(true, true)

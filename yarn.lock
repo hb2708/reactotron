@@ -29579,6 +29579,7 @@ __metadata:
     react-tooltip: "npm:4.5.1"
     reactotron-core-contract: "workspace:*"
     reactotron-core-ui: "workspace:*"
+    reactotron-mcp: "workspace:*"
     rimraf: "npm:^5.0.5"
     styled-components: "npm:^6.1.0"
     typescript: "npm:^5.1.3"

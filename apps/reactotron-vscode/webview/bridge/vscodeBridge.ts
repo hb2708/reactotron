@@ -198,3 +198,26 @@ export function subscribeServerEvents(handlers: {
     unlisteners.forEach((fn) => fn())
   }
 }
+
+export async function startMcpServer(
+  port = 4567,
+  redactionConfig?: any
+): Promise<{ started: boolean; port: number | null }> {
+  if (!isVscodeRuntime()) return { started: false, port: null }
+  return requestHost("startMcp", { port, redactionConfig })
+}
+
+export async function stopMcpServer(): Promise<{ started: boolean; port: number | null }> {
+  if (!isVscodeRuntime()) return { started: false, port: null }
+  return requestHost("stopMcp")
+}
+
+export async function updateMcpRedactionConfig(redactionConfig: any): Promise<void> {
+  if (!isVscodeRuntime()) return
+  await requestHost("updateMcpRedactionConfig", { redactionConfig })
+}
+
+export async function getMcpState(): Promise<{ started: boolean; port: number | null }> {
+  if (!isVscodeRuntime()) return { started: false, port: null }
+  return requestHost("getMcpState")
+}

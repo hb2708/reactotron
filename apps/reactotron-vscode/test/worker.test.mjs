@@ -130,6 +130,42 @@ const warnBatch = await waitForEvent(
 )
 assert.ok(warnBatch)
 
+// 5. MCP HTTP server start / initialize / stop
+const mcpProbe = net.createServer()
+await new Promise((resolve) => mcpProbe.listen(0, "127.0.0.1", resolve))
+const mcpProbeAddr = mcpProbe.address()
+assert.ok(mcpProbeAddr && typeof mcpProbeAddr === "object")
+const mcpPort = mcpProbeAddr.port
+await new Promise((resolve) => mcpProbe.close(resolve))
+
+const mcpStartRes = await callWorker("startMcp", { port: mcpPort })
+assert.equal(mcpStartRes.started, true)
+assert.equal(mcpStartRes.port, mcpPort)
+
+const mcpInitRes = await fetch(`http://127.0.0.1:${mcpPort}/mcp`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "worker-test", version: "0.1.0" },
+    },
+  }),
+})
+assert.equal(mcpInitRes.status, 200)
+const mcpInitBody = await mcpInitRes.text()
+assert.ok(mcpInitBody.includes("reactotron"), `Expected reactotron in MCP response: ${mcpInitBody}`)
+
+const mcpStopRes = await callWorker("stopMcp")
+assert.equal(mcpStopRes.started, false)
+
 ws.close()
 await callWorker("shutdown")
 

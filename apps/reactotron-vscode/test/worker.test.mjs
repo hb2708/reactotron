@@ -3,6 +3,7 @@ import net from "node:net"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Worker } from "node:worker_threads"
+import WebSocket from "ws"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const workerPath = path.resolve(__dirname, "../dist/serverWorker.js")

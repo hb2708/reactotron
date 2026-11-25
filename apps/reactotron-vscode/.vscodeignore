@@ -1,0 +1,15 @@
+src/**
+webview/**
+test/**
+scripts/**
+node_modules/**
+public/**
+index.html
+tsconfig.json
+tsconfig.webview.json
+vite.config.ts
+project.json
+.gitignore
+**/*.ts
+**/*.tsx
+**/*.map

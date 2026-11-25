@@ -151,9 +151,16 @@ export async function clearPayloadStore(clientId?: string): Promise<void> {
 export async function searchCommandPayloads(
   query: string,
   clientId?: string
-): Promise<number[]> {
-  if (!isVscodeRuntime()) return []
-  return requestHost<number[]>("searchCommandPayloads", { query, clientId: clientId ?? null })
+): Promise<{ workerGeneration: number; ids: number[] }> {
+  if (!isVscodeRuntime()) return { workerGeneration: 0, ids: [] }
+  const res = await requestHost<{ workerGeneration: number; ids: number[] }>(
+    "searchCommandPayloads",
+    { query, clientId: clientId ?? null }
+  )
+  if (Array.isArray(res)) {
+    return { workerGeneration: 0, ids: res }
+  }
+  return res ?? { workerGeneration: 0, ids: [] }
 }
 
 export function copyText(text: string): void {

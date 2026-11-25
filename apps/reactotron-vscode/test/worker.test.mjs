@@ -187,8 +187,14 @@ try {
   })
   assert.equal(staleGenHydrated, null)
 
+  const missingGenHydrated = await main.callWorker("getCommandPayload", {
+    messageId: apiCmd.messageId,
+  })
+  assert.equal(missingGenHydrated, null)
+
   const searchHits = await main.callWorker("searchCommandPayloads", { query: "needle_in_haystack" })
-  assert.ok(searchHits.includes(apiCmd.messageId))
+  assert.equal(searchHits.workerGeneration, 1)
+  assert.ok(searchHits.ids.includes(apiCmd.messageId))
 
   // Scoped clear reclaims index entries
   await main.callWorker("clearPayloadStore", { clientId })

@@ -99,6 +99,8 @@ const activeClientIds = new Set<string>()
 let currentStatus: "stopped" | "started" | "portUnavailable" = "stopped"
 let currentPort = 9090
 let currentBindHost = "0.0.0.0"
+let failedPort = 9090
+let failedBindHost = "0.0.0.0"
 let requestedPort = 9090
 let requestedBindHost = "0.0.0.0"
 let workerGeneration = 0
@@ -123,8 +125,8 @@ function callWorker(action: string, payload: Record<string, any> = {}): Promise<
 function updateStatusBar() {
   if (!statusBar) return
   if (currentStatus === "portUnavailable") {
-    statusBar.text = `$(warning) Reactotron :${requestedPort} busy`
-    statusBar.tooltip = `Port ${requestedPort} (${requestedBindHost}) is already in use — Click to inspect or run Restart Server`
+    statusBar.text = `$(warning) Reactotron :${failedPort} busy`
+    statusBar.tooltip = `Port ${failedPort} (${failedBindHost}) is already in use — Click to inspect or run Restart Server`
   } else if (currentStatus === "started") {
     statusBar.text = `$(radio-tower) Reactotron :${currentPort} (${activeClientIds.size})`
     statusBar.tooltip = `Listening on ${currentBindHost}:${currentPort} — Click to open inspector`
@@ -146,6 +148,8 @@ function startWorker(context: vscode.ExtensionContext) {
   requestedBindHost = cfg.get<string>("bindHost", "0.0.0.0")
   currentPort = requestedPort
   currentBindHost = requestedBindHost
+  failedPort = requestedPort
+  failedBindHost = requestedBindHost
   const maxPayloadMB = cfg.get<number>("maxPayloadMB", 5)
   const generation = ++workerGeneration
 
@@ -173,19 +177,21 @@ function startWorker(context: vscode.ExtensionContext) {
     switch (msg?.event) {
       case "serverStarted":
         currentStatus = "started"
-        currentPort = msg.port ?? requestedPort
-        currentBindHost = msg.bindHost ?? requestedBindHost
-        requestedPort = currentPort
-        requestedBindHost = currentBindHost
+        currentPort = msg.port ?? currentPort
+        currentBindHost = msg.bindHost ?? currentBindHost
         updateStatusBar()
         postToWebview({ type: "event", event: "reactotron://server-started" })
         break
       case "portUnavailable":
         currentStatus = "portUnavailable"
-        requestedPort = msg.port ?? requestedPort
-        requestedBindHost = msg.bindHost ?? requestedBindHost
+        failedPort = msg.port ?? requestedPort
+        failedBindHost = msg.bindHost ?? requestedBindHost
         updateStatusBar()
-        postToWebview({ type: "event", event: "reactotron://port-unavailable" })
+        postToWebview({
+          type: "event",
+          event: "reactotron://port-unavailable",
+          payload: { port: failedPort, bindHost: failedBindHost },
+        })
         break
       case "connectionEstablished": {
         const cid = msg.connection?.clientId
@@ -560,11 +566,12 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         const res = await callWorker("restart", { port: requestedPort, bindHost: requestedBindHost })
         currentStatus = res.status
-        requestedPort = res.port ?? requestedPort
-        requestedBindHost = res.bindHost ?? requestedBindHost
         if (currentStatus === "started") {
-          currentPort = requestedPort
-          currentBindHost = requestedBindHost
+          currentPort = res.port ?? requestedPort
+          currentBindHost = res.bindHost ?? requestedBindHost
+        } else if (currentStatus === "portUnavailable") {
+          failedPort = res.port ?? requestedPort
+          failedBindHost = res.bindHost ?? requestedBindHost
         }
         updateStatusBar()
         if (currentStatus === "started") {
@@ -573,7 +580,7 @@ export function activate(context: vscode.ExtensionContext) {
           )
         } else {
           void vscode.window.showWarningMessage(
-            `Reactotron port ${requestedPort} is still unavailable`
+            `Reactotron port ${failedPort} is still unavailable`
           )
         }
       } catch (err: any) {
@@ -596,11 +603,12 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         const res = await callWorker("restart", { bindHost: nextHost, port: requestedPort })
         currentStatus = res.status
-        requestedPort = res.port ?? requestedPort
-        requestedBindHost = res.bindHost ?? nextHost
         if (currentStatus === "started") {
-          currentPort = requestedPort
-          currentBindHost = requestedBindHost
+          currentPort = res.port ?? requestedPort
+          currentBindHost = res.bindHost ?? nextHost
+        } else if (currentStatus === "portUnavailable") {
+          failedPort = res.port ?? requestedPort
+          failedBindHost = res.bindHost ?? nextHost
         }
         updateStatusBar()
         if (currentStatus === "started") {
@@ -609,7 +617,7 @@ export function activate(context: vscode.ExtensionContext) {
           )
         } else {
           void vscode.window.showWarningMessage(
-            `Reactotron port ${requestedPort} (${requestedBindHost}) is unavailable`
+            `Reactotron port ${failedPort} (${failedBindHost}) is unavailable`
           )
         }
       } catch (err: any) {
@@ -640,11 +648,12 @@ export function activate(context: vscode.ExtensionContext) {
         })
           .then((res) => {
             currentStatus = res.status
-            requestedPort = res.port ?? requestedPort
-            requestedBindHost = res.bindHost ?? requestedBindHost
             if (currentStatus === "started") {
-              currentPort = requestedPort
-              currentBindHost = requestedBindHost
+              currentPort = res.port ?? requestedPort
+              currentBindHost = res.bindHost ?? requestedBindHost
+            } else if (currentStatus === "portUnavailable") {
+              failedPort = res.port ?? requestedPort
+              failedBindHost = res.bindHost ?? requestedBindHost
             }
             updateStatusBar()
           })

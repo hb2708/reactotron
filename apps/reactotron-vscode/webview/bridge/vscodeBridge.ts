@@ -31,6 +31,7 @@ export interface IncomingCommandPayload {
   deltaTime: number
   important: boolean
   messageId: number
+  workerGeneration?: number
   payload: any
   payloadOffloaded?: boolean
   diff?: any
@@ -110,9 +111,14 @@ export async function sendServerCommand(
   commandType: string,
   payload: any,
   clientId?: string
-): Promise<void> {
-  if (!isVscodeRuntime()) return
-  await requestHost("sendCommand", { commandType, payload, clientId: clientId || null })
+): Promise<number> {
+  if (!isVscodeRuntime()) return 0
+  const sent = await requestHost<number>("sendCommand", {
+    commandType,
+    payload,
+    clientId: clientId || null,
+  })
+  return typeof sent === "number" ? sent : 0
 }
 
 export async function openInEditor(file: string, lineNumber?: number): Promise<void> {
@@ -129,9 +135,12 @@ export async function exportTimelineLog(contents: string, filePath?: string): Pr
   return requestHost<string>("exportTimelineLog", { contents, filePath: filePath ?? null })
 }
 
-export async function getCommandPayload(messageId: number): Promise<any | null> {
+export async function getCommandPayload(
+  messageId: number,
+  workerGeneration?: number
+): Promise<any | null> {
   if (!isVscodeRuntime()) return null
-  return requestHost<any | null>("getCommandPayload", { messageId })
+  return requestHost<any | null>("getCommandPayload", { messageId, workerGeneration })
 }
 
 export async function clearPayloadStore(clientId?: string): Promise<void> {

@@ -63,19 +63,20 @@ function validateReadableSourcePath(resolvedPath: string): void {
     throw new Error(`Unsupported source file extension: .${ext || "none"}`)
   }
   const folders = vscode.workspace.workspaceFolders
-  if (folders && folders.length > 0) {
-    const insideWorkspace = folders.some((folder) => {
-      let root = folder.uri.fsPath
-      try {
-        root = fs.realpathSync(root)
-      } catch {
-        // fall back to fsPath when folder symlink cannot be resolved
-      }
-      return resolvedPath === root || resolvedPath.startsWith(root + path.sep)
-    })
-    if (!insideWorkspace) {
-      throw new Error("Source file is outside open workspace folders")
+  if (!folders || folders.length === 0) {
+    throw new Error("No open workspace folder to read source files from")
+  }
+  const insideWorkspace = folders.some((folder) => {
+    let root = folder.uri.fsPath
+    try {
+      root = fs.realpathSync(root)
+    } catch {
+      // fall back to fsPath when folder symlink cannot be resolved
     }
+    return resolvedPath === root || resolvedPath.startsWith(root + path.sep)
+  })
+  if (!insideWorkspace) {
+    throw new Error("Source file is outside open workspace folders")
   }
 }
 
@@ -94,10 +95,13 @@ let worker: Worker | null = null
 let panel: vscode.WebviewPanel | null = null
 let statusBar: vscode.StatusBarItem | null = null
 let adbTracker: ChildProcess | null = null
-let activeConnectionsCount = 0
+const activeClientIds = new Set<string>()
 let currentStatus: "stopped" | "started" | "portUnavailable" = "stopped"
 let currentPort = 9090
 let currentBindHost = "0.0.0.0"
+let requestedPort = 9090
+let requestedBindHost = "0.0.0.0"
+let workerGeneration = 0
 
 let reqCounter = 0
 const pendingRequests = new Map<
@@ -119,10 +123,10 @@ function callWorker(action: string, payload: Record<string, any> = {}): Promise<
 function updateStatusBar() {
   if (!statusBar) return
   if (currentStatus === "portUnavailable") {
-    statusBar.text = `$(warning) Reactotron :${currentPort} busy`
-    statusBar.tooltip = `Port ${currentPort} is already in use`
+    statusBar.text = `$(warning) Reactotron :${requestedPort} busy`
+    statusBar.tooltip = `Port ${requestedPort} (${requestedBindHost}) is already in use — Click to inspect or run Restart Server`
   } else if (currentStatus === "started") {
-    statusBar.text = `$(radio-tower) Reactotron :${currentPort} (${activeConnectionsCount})`
+    statusBar.text = `$(radio-tower) Reactotron :${currentPort} (${activeClientIds.size})`
     statusBar.tooltip = `Listening on ${currentBindHost}:${currentPort} — Click to open inspector`
   } else {
     statusBar.text = "$(circle-slash) Reactotron (stopped)"
@@ -138,16 +142,20 @@ function startWorker(context: vscode.ExtensionContext) {
   if (worker) return
 
   const cfg = vscode.workspace.getConfiguration("reactotron")
-  currentPort = cfg.get<number>("port", 9090)
-  currentBindHost = cfg.get<string>("bindHost", "0.0.0.0")
+  requestedPort = cfg.get<number>("port", 9090)
+  requestedBindHost = cfg.get<string>("bindHost", "0.0.0.0")
+  currentPort = requestedPort
+  currentBindHost = requestedBindHost
   const maxPayloadMB = cfg.get<number>("maxPayloadMB", 5)
+  const generation = ++workerGeneration
 
   const workerPath = path.join(context.extensionPath, "dist", "serverWorker.js")
   worker = new Worker(workerPath, {
     workerData: {
-      port: currentPort,
-      bindHost: currentBindHost,
+      port: requestedPort,
+      bindHost: requestedBindHost,
       maxPayloadBytes: Math.max(1, maxPayloadMB) * 1024 * 1024,
+      workerGeneration: generation,
     },
   })
 
@@ -165,18 +173,23 @@ function startWorker(context: vscode.ExtensionContext) {
     switch (msg?.event) {
       case "serverStarted":
         currentStatus = "started"
-        currentPort = msg.port ?? currentPort
-        currentBindHost = msg.bindHost ?? currentBindHost
+        currentPort = msg.port ?? requestedPort
+        currentBindHost = msg.bindHost ?? requestedBindHost
+        requestedPort = currentPort
+        requestedBindHost = currentBindHost
         updateStatusBar()
         postToWebview({ type: "event", event: "reactotron://server-started" })
         break
       case "portUnavailable":
         currentStatus = "portUnavailable"
+        requestedPort = msg.port ?? requestedPort
+        requestedBindHost = msg.bindHost ?? requestedBindHost
         updateStatusBar()
         postToWebview({ type: "event", event: "reactotron://port-unavailable" })
         break
-      case "connectionEstablished":
-        activeConnectionsCount += 1
+      case "connectionEstablished": {
+        const cid = msg.connection?.clientId
+        if (typeof cid === "string" && cid) activeClientIds.add(cid)
         updateStatusBar()
         postToWebview({
           type: "event",
@@ -184,8 +197,10 @@ function startWorker(context: vscode.ExtensionContext) {
           payload: msg.connection,
         })
         break
-      case "disconnect":
-        activeConnectionsCount = Math.max(0, activeConnectionsCount - 1)
+      }
+      case "disconnect": {
+        const cid = msg.connection?.clientId
+        if (typeof cid === "string" && cid) activeClientIds.delete(cid)
         updateStatusBar()
         postToWebview({
           type: "event",
@@ -193,6 +208,7 @@ function startWorker(context: vscode.ExtensionContext) {
           payload: msg.connection,
         })
         break
+      }
       case "commandsBatch":
         postToWebview({
           type: "event",
@@ -205,7 +221,7 @@ function startWorker(context: vscode.ExtensionContext) {
 
   worker.on("error", (err) => {
     currentStatus = "stopped"
-    activeConnectionsCount = 0
+    activeClientIds.clear()
     updateStatusBar()
     void vscode.window.showWarningMessage(`Reactotron server worker error: ${err.message}`)
   })
@@ -217,7 +233,7 @@ function startWorker(context: vscode.ExtensionContext) {
     pendingRequests.clear()
     worker = null
     currentStatus = "stopped"
-    activeConnectionsCount = 0
+    activeClientIds.clear()
     updateStatusBar()
   })
 }
@@ -338,13 +354,16 @@ function openInspectorPanel(context: vscode.ExtensionContext) {
     panel.iconPath = iconPath
   }
 
-  panel.webview.html = getWebviewHtml(context, panel.webview)
+  const currentPanel = panel
+  const targetWebview = currentPanel.webview
 
-  panel.webview.onDidReceiveMessage(async (msg: any) => {
+  targetWebview.html = getWebviewHtml(context, targetWebview)
+
+  targetWebview.onDidReceiveMessage(async (msg: any) => {
     const { requestId, action } = msg || {}
     const respond = (ok: boolean, result?: unknown, error?: string) => {
       if (requestId !== undefined) {
-        postToWebview({ type: "response", requestId, ok, result, error })
+        void targetWebview.postMessage({ type: "response", requestId, ok, result, error })
       }
     }
 
@@ -365,7 +384,10 @@ function openInspectorPanel(context: vscode.ExtensionContext) {
           break
         }
         case "getCommandPayload": {
-          const payload = await callWorker("getCommandPayload", { messageId: msg.messageId })
+          const payload = await callWorker("getCommandPayload", {
+            messageId: msg.messageId,
+            workerGeneration: msg.workerGeneration,
+          })
           respond(true, payload)
           break
         }
@@ -419,14 +441,19 @@ function openInspectorPanel(context: vscode.ExtensionContext) {
           const targetFile = path.join(downloadsDir, filename)
 
           let output = String(msg.contents ?? "[]")
+          let parsedArray: any[] | null = null
           try {
             const parsed = JSON.parse(output)
             if (Array.isArray(parsed)) {
-              const hydrated = await callWorker("hydrateExport", { commands: parsed })
-              output = JSON.stringify(hydrated)
+              parsedArray = parsed
             }
           } catch {
             // write raw contents if not JSON array
+          }
+
+          if (parsedArray !== null) {
+            const hydrated = await callWorker("hydrateExport", { commands: parsedArray })
+            output = JSON.stringify(hydrated)
           }
 
           await fs.promises.writeFile(targetFile, output, "utf8")
@@ -492,8 +519,13 @@ function openInspectorPanel(context: vscode.ExtensionContext) {
     }
   })
 
-  panel.onDidDispose(() => {
-    panel = null
+  currentPanel.onDidDispose(() => {
+    if (panel === currentPanel) {
+      panel = null
+    }
+    if (worker) {
+      void callWorker("stopMcp").catch(() => {})
+    }
   })
 }
 
@@ -513,7 +545,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("reactotron.open", () => {
       if (!worker) startWorker(context)
       else if (currentStatus === "portUnavailable") {
-        void callWorker("restart", { port: currentPort, bindHost: currentBindHost }).catch(() => {})
+        void callWorker("restart", { port: requestedPort, bindHost: requestedBindHost }).catch(
+          () => {}
+        )
       }
       openInspectorPanel(context)
     }),
@@ -522,32 +556,67 @@ export function activate(context: vscode.ExtensionContext) {
         startWorker(context)
         return
       }
-      activeConnectionsCount = 0
-      const res = await callWorker("restart", { port: currentPort, bindHost: currentBindHost })
-      currentStatus = res.status
-      currentPort = res.port ?? currentPort
-      currentBindHost = res.bindHost ?? currentBindHost
-      updateStatusBar()
-      if (currentStatus === "started") {
-        void vscode.window.showInformationMessage(
-          `Reactotron restarted on ${currentBindHost}:${currentPort}`
-        )
-      } else {
-        void vscode.window.showWarningMessage(
-          `Reactotron port ${currentPort} is still unavailable`
+      activeClientIds.clear()
+      try {
+        const res = await callWorker("restart", { port: requestedPort, bindHost: requestedBindHost })
+        currentStatus = res.status
+        requestedPort = res.port ?? requestedPort
+        requestedBindHost = res.bindHost ?? requestedBindHost
+        if (currentStatus === "started") {
+          currentPort = requestedPort
+          currentBindHost = requestedBindHost
+        }
+        updateStatusBar()
+        if (currentStatus === "started") {
+          void vscode.window.showInformationMessage(
+            `Reactotron restarted on ${currentBindHost}:${currentPort}`
+          )
+        } else {
+          void vscode.window.showWarningMessage(
+            `Reactotron port ${requestedPort} is still unavailable`
+          )
+        }
+      } catch (err: any) {
+        void vscode.window.showErrorMessage(
+          `Reactotron restart failed: ${err?.message || String(err)}`
         )
       }
     }),
     vscode.commands.registerCommand("reactotron.toggleBindMode", async () => {
-      if (!worker) startWorker(context)
-      const nextHost = currentBindHost === "0.0.0.0" ? "127.0.0.1" : "0.0.0.0"
-      activeConnectionsCount = 0
-      const res = await callWorker("restart", { bindHost: nextHost, port: currentPort })
-      currentBindHost = res.bindHost
-      updateStatusBar()
-      void vscode.window.showInformationMessage(
-        `Reactotron listening on ${currentBindHost}:${currentPort}`
-      )
+      const nextHost = requestedBindHost === "0.0.0.0" ? "127.0.0.1" : "0.0.0.0"
+      requestedBindHost = nextHost
+      if (!worker) {
+        void vscode.workspace
+          .getConfiguration("reactotron")
+          .update("bindHost", nextHost, vscode.ConfigurationTarget.Global)
+        startWorker(context)
+        return
+      }
+      activeClientIds.clear()
+      try {
+        const res = await callWorker("restart", { bindHost: nextHost, port: requestedPort })
+        currentStatus = res.status
+        requestedPort = res.port ?? requestedPort
+        requestedBindHost = res.bindHost ?? nextHost
+        if (currentStatus === "started") {
+          currentPort = requestedPort
+          currentBindHost = requestedBindHost
+        }
+        updateStatusBar()
+        if (currentStatus === "started") {
+          void vscode.window.showInformationMessage(
+            `Reactotron listening on ${currentBindHost}:${currentPort}`
+          )
+        } else {
+          void vscode.window.showWarningMessage(
+            `Reactotron port ${requestedPort} (${requestedBindHost}) is unavailable`
+          )
+        }
+      } catch (err: any) {
+        void vscode.window.showErrorMessage(
+          `Reactotron bind switch failed: ${err?.message || String(err)}`
+        )
+      }
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (
@@ -556,13 +625,30 @@ export function activate(context: vscode.ExtensionContext) {
         e.affectsConfiguration("reactotron.maxPayloadMB")
       ) {
         const cfg = vscode.workspace.getConfiguration("reactotron")
+        requestedPort = cfg.get<number>("port", 9090)
+        requestedBindHost = cfg.get<string>("bindHost", "0.0.0.0")
         const maxBytes = Math.max(1, cfg.get<number>("maxPayloadMB", 5)) * 1024 * 1024
-        void callWorker("setMaxPayloadBytes", { maxBytes })
-        activeConnectionsCount = 0
+        if (!worker) {
+          updateStatusBar()
+          return
+        }
+        void callWorker("setMaxPayloadBytes", { maxBytes }).catch(() => {})
+        activeClientIds.clear()
         void callWorker("restart", {
-          port: cfg.get<number>("port", 9090),
-          bindHost: cfg.get<string>("bindHost", "0.0.0.0"),
+          port: requestedPort,
+          bindHost: requestedBindHost,
         })
+          .then((res) => {
+            currentStatus = res.status
+            requestedPort = res.port ?? requestedPort
+            requestedBindHost = res.bindHost ?? requestedBindHost
+            if (currentStatus === "started") {
+              currentPort = requestedPort
+              currentBindHost = requestedBindHost
+            }
+            updateStatusBar()
+          })
+          .catch(() => {})
       }
     })
   )

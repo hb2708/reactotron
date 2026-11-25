@@ -217,6 +217,8 @@ function useStandalone() {
   const listenersRef = useRef<((command: any) => void)[]>([])
   const pendingBatchRef = useRef<any[]>([])
   const flushHandleRef = useRef<number | null>(null)
+  const selectedClientIdRef = useRef<string | null>(null)
+  selectedClientIdRef.current = state.selectedClientId
 
   const flushPending = useCallback(() => {
     flushHandleRef.current = null
@@ -279,7 +281,12 @@ function useStandalone() {
   }, [])
 
   const clearSelectedConnectionCommands = useCallback(() => {
-    pendingBatchRef.current = []
+    const currentClientId = selectedClientIdRef.current
+    if (currentClientId) {
+      pendingBatchRef.current = pendingBatchRef.current.filter(
+        (cmd) => cmd.clientId !== currentClientId
+      )
+    }
     dispatch({ type: ActionTypes.ClearConnectionCommands })
   }, [])
 

@@ -64,6 +64,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: Reactotron VS Code ${{ steps.meta.outputs.tag }}
           files: apps/reactotron-vscode/reactotron-vscode-*.vsix
           generate_release_notes: true

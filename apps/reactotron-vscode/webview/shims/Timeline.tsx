@@ -1,6 +1,5 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import { clipboard, shell } from "electron"
-import fs from "fs"
 import os from "os"
 import path from "path"
 import debounce from "lodash.debounce"
@@ -16,6 +15,7 @@ import {
   TimelineContext,
   RandomJoke,
 } from "reactotron-core-ui"
+import StandaloneContext from "../../../reactotron-app/src/renderer/contexts/Standalone"
 import {
   MdSearch,
   MdDeleteSweep,
@@ -26,8 +26,10 @@ import {
 } from "react-icons/md"
 import { FaTimes } from "react-icons/fa"
 import styled from "styled-components"
+import fs from "fs"
 import {
   clearPayloadStore,
+  exportTimelineLog,
   getCommandPayload,
   searchCommandPayloads,
 } from "../bridge/vscodeBridge"
@@ -103,13 +105,17 @@ const ExportToast = styled.div<{ $isError?: boolean }>`
 `
 
 const MAX_HYDRATED_PAYLOADS = 25
-const hydratedPayloadCache = new Map<number, any>()
+const hydratedPayloadCache = new Map<string, { clientId?: string; payload: any }>()
 
-function cacheHydratedPayload(messageId: number, payload: any) {
-  if (hydratedPayloadCache.has(messageId)) {
-    hydratedPayloadCache.delete(messageId)
+function getCacheKey(command: any): string {
+  return `${command.workerGeneration ?? 0}:${command.messageId}`
+}
+
+function cacheHydratedPayload(cacheKey: string, clientId: string | undefined, payload: any) {
+  if (hydratedPayloadCache.has(cacheKey)) {
+    hydratedPayloadCache.delete(cacheKey)
   }
-  hydratedPayloadCache.set(messageId, payload)
+  hydratedPayloadCache.set(cacheKey, { clientId, payload })
   if (hydratedPayloadCache.size > MAX_HYDRATED_PAYLOADS) {
     const oldestKey = hydratedPayloadCache.keys().next().value
     if (oldestKey !== undefined) hydratedPayloadCache.delete(oldestKey)
@@ -129,22 +135,37 @@ function LazyTimelineRow({
   openDispatchModal: any
   onLayoutChange: () => void
 }) {
+  const cacheKey = getCacheKey(command)
   const [hydratedPayload, setHydratedPayload] = useState<any>(() =>
-    command.payloadOffloaded ? hydratedPayloadCache.get(command.messageId) : undefined
+    command.payloadOffloaded ? hydratedPayloadCache.get(cacheKey)?.payload : undefined
   )
+
+  useEffect(() => {
+    setHydratedPayload(
+      command.payloadOffloaded ? hydratedPayloadCache.get(cacheKey)?.payload : undefined
+    )
+  }, [cacheKey, command.payloadOffloaded])
 
   const handleClickCapture = useCallback(() => {
     requestAnimationFrame(() => onLayoutChange())
     if (!command.payloadOffloaded || hydratedPayload !== undefined) return
-    void getCommandPayload(command.messageId).then((raw) => {
+    void getCommandPayload(command.messageId, command.workerGeneration).then((raw) => {
       if (raw != null) {
         const repaired = typeof raw === "object" ? repairSerialization(raw) : raw
-        cacheHydratedPayload(command.messageId, repaired)
+        cacheHydratedPayload(cacheKey, command.clientId, repaired)
         setHydratedPayload(repaired)
         requestAnimationFrame(() => onLayoutChange())
       }
     })
-  }, [command.messageId, command.payloadOffloaded, hydratedPayload, onLayoutChange])
+  }, [
+    cacheKey,
+    command.clientId,
+    command.messageId,
+    command.payloadOffloaded,
+    command.workerGeneration,
+    hydratedPayload,
+    onLayoutChange,
+  ])
 
   const effectiveCommand = useMemo(
     () => (hydratedPayload !== undefined ? { ...command, payload: hydratedPayload } : command),
@@ -177,6 +198,8 @@ function LazyTimelineRow({
 
 function Timeline() {
   const { sendCommand, clearCommands, commands, openDispatchModal } = useContext(ReactotronContext)
+  const { selectedConnection } = useContext(StandaloneContext)
+  const selectedClientId = selectedConnection?.clientId
   const {
     isSearchOpen,
     toggleSearch,
@@ -201,13 +224,13 @@ function Timeline() {
       return
     }
     let cancelled = false
-    void searchCommandPayloads(trimmed).then((ids) => {
+    void searchCommandPayloads(trimmed, selectedClientId).then((ids) => {
       if (!cancelled) setWorkerSearchHits(new Set(ids))
     })
     return () => {
       cancelled = true
     }
-  }, [search, commands.length])
+  }, [search, commands.length, selectedClientId])
 
   let filteredCommands: any[]
   try {
@@ -245,13 +268,16 @@ function Timeline() {
     exportTimerRef.current = setTimeout(() => setExportNotice(null), 3500)
   }
 
-  function downloadLog() {
+  async function downloadLog() {
     const filename = `timeline-log-${Date.now()}.json`
     try {
       const homeDir = os.homedir()
       const downloadDir = path.join(homeDir, "Downloads")
       const fullPath = path.resolve(downloadDir, filename)
-      fs.writeFileSync(fullPath, JSON.stringify(commands || []), "utf8")
+      const savedPath = await exportTimelineLog(JSON.stringify(commands || []), fullPath)
+      if (!savedPath) {
+        throw new Error("VS Code export unavailable")
+      }
       showExportNotice(`Saved ~/Downloads/${filename}`)
     } catch (err: any) {
       showExportNotice(`Export failed: ${err?.message || "unknown error"}`, true)
@@ -270,7 +296,11 @@ function Timeline() {
     rowVirtualizer.measure()
   }, [rowVirtualizer])
 
-  const { searchString, handleInputChange } = useDebouncedSearchInput(search, setSearch, 300)
+  const { searchString, handleInputChange, resetSearch } = useDebouncedSearchInput(
+    search,
+    setSearch,
+    300
+  )
 
   return (
     <Container>
@@ -278,7 +308,13 @@ function Timeline() {
         title="Timeline"
         isDraggable
         actions={[
-          { tip: "Export Log", icon: MdDownload, onClick: downloadLog },
+          {
+            tip: "Export Log",
+            icon: MdDownload,
+            onClick: () => {
+              void downloadLog()
+            },
+          },
           { tip: "Search", icon: MdSearch, onClick: toggleSearch },
           { tip: "Filter", icon: MdFilterList, onClick: openFilter },
           { tip: "Reverse Order", icon: MdSwapVert, onClick: toggleReverse },
@@ -286,8 +322,12 @@ function Timeline() {
             tip: "Clear",
             icon: MdDeleteSweep,
             onClick: () => {
-              hydratedPayloadCache.clear()
-              void clearPayloadStore()
+              if (selectedClientId) {
+                for (const [key, entry] of hydratedPayloadCache.entries()) {
+                  if (entry.clientId === selectedClientId) hydratedPayloadCache.delete(key)
+                }
+                void clearPayloadStore(selectedClientId)
+              }
               clearCommands()
             },
           },
@@ -299,8 +339,8 @@ function Timeline() {
             <SearchInput autoFocus value={searchString} onChange={handleInputChange} />
             <ButtonContainer
               onClick={() => {
-                if (search === "") closeSearch()
-                else setSearch("")
+                if (search === "" && searchString === "") closeSearch()
+                else resetSearch()
               }}
             >
               <FaTimes size={24} />
@@ -383,6 +423,12 @@ const useDebouncedSearchInput = (
   const [searchString, setSearchString] = React.useState<string>(initialValue)
   const debouncedOnChange = useMemo(() => debounce(setSearch, delay), [delay, setSearch])
 
+  useEffect(() => {
+    return () => {
+      debouncedOnChange.cancel()
+    }
+  }, [debouncedOnChange])
+
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const { value } = e.target
@@ -392,5 +438,11 @@ const useDebouncedSearchInput = (
     [debouncedOnChange]
   )
 
-  return { searchString, handleInputChange }
+  const resetSearch = useCallback(() => {
+    debouncedOnChange.cancel()
+    setSearchString("")
+    setSearch("")
+  }, [debouncedOnChange, setSearch])
+
+  return { searchString, handleInputChange, resetSearch }
 }

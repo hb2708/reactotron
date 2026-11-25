@@ -1,21 +1,22 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { defineConfig, type Plugin } from "vite"
+import { defineConfig, normalizePath, type Plugin } from "vite"
 import react from "@vitejs/plugin-react"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(__dirname, "../..")
-const appRendererDir = path.resolve(__dirname, "../reactotron-app/src/renderer")
-const appImagesDir = path.resolve(appRendererDir, "images")
-const imagesShimPath = path.resolve(__dirname, "webview/shims/images.ts")
-const useStandaloneSourcePath = path.resolve(
-  appRendererDir,
-  "contexts/Standalone/useStandalone"
+const repoRoot = normalizePath(path.resolve(__dirname, "../.."))
+const appRendererDir = normalizePath(path.resolve(__dirname, "../reactotron-app/src/renderer"))
+const appImagesDir = normalizePath(path.join(appRendererDir, "images"))
+const imagesShimPath = normalizePath(path.resolve(__dirname, "webview/shims/images.ts"))
+const useStandaloneSourcePath = normalizePath(
+  path.join(appRendererDir, "contexts/Standalone/useStandalone")
 )
-const useStandaloneShimPath = path.resolve(__dirname, "webview/shims/useStandalone.ts")
-const timelinePageDir = path.resolve(appRendererDir, "pages/timeline")
-const timelineShimPath = path.resolve(__dirname, "webview/shims/Timeline.tsx")
-const helpPagePath = path.resolve(appRendererDir, "pages/help/index.tsx")
+const useStandaloneShimPath = normalizePath(
+  path.resolve(__dirname, "webview/shims/useStandalone.ts")
+)
+const timelinePageDir = normalizePath(path.join(appRendererDir, "pages/timeline"))
+const timelineShimPath = normalizePath(path.resolve(__dirname, "webview/shims/Timeline.tsx"))
+const helpPagePath = normalizePath(path.join(appRendererDir, "pages/help/index.tsx"))
 
 function reactotronAppCompat(): Plugin {
   return {
@@ -23,10 +24,10 @@ function reactotronAppCompat(): Plugin {
     enforce: "pre",
     resolveId(source, importer) {
       if (!importer || !source.startsWith(".")) return null
-      const cleanImporter = importer.split("?")[0]
+      const cleanImporter = normalizePath(importer.split("?")[0])
       if (!cleanImporter.startsWith(appRendererDir)) return null
-      const resolved = path.resolve(path.dirname(cleanImporter), source)
-      if (resolved === appImagesDir || resolved === path.join(appImagesDir, "index.ts")) {
+      const resolved = normalizePath(path.resolve(path.dirname(cleanImporter), source))
+      if (resolved === appImagesDir || resolved === `${appImagesDir}/index.ts`) {
         return imagesShimPath
       }
       if (
@@ -35,13 +36,13 @@ function reactotronAppCompat(): Plugin {
       ) {
         return useStandaloneShimPath
       }
-      if (resolved === timelinePageDir || resolved === path.join(timelinePageDir, "index.tsx")) {
+      if (resolved === timelinePageDir || resolved === `${timelinePageDir}/index.tsx`) {
         return timelineShimPath
       }
       return null
     },
     transform(code, id) {
-      const cleanId = id.split("?")[0]
+      const cleanId = normalizePath(id.split("?")[0])
       if (cleanId === helpPagePath) {
         return code.replace(
           'const projectJson = require("../../../../package.json")',

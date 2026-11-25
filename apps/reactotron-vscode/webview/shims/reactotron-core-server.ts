@@ -27,6 +27,7 @@ function normalizeCommand(raw: IncomingCommandPayload) {
     deltaTime: raw.deltaTime ?? 0,
     important: Boolean(raw.important),
     messageId: raw.messageId,
+    workerGeneration: raw.workerGeneration,
     payload: repairedPayload,
     payloadOffloaded: isOffloaded,
     diff: raw.diff,
@@ -117,7 +118,7 @@ export default class Server {
       const lineNum = Number(payload.lineNumber)
       void openInEditor(payload.file, Number.isFinite(lineNum) ? lineNum : undefined)
     }
-    void sendServerCommand(type, payload, clientId)
+    return sendServerCommand(type, payload, clientId)
   }
 }
 

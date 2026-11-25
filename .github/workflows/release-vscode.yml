@@ -40,14 +40,6 @@ jobs:
           SKIP_LIB_BUILD: "1"
         run: yarn install --immutable
 
-      - name: Cache Nx build outputs
-        uses: actions/cache@v4
-        with:
-          path: .nx/cache
-          key: ${{ runner.os }}-nx-vscode-${{ hashFiles('yarn.lock', 'lib/**/src/**', 'apps/reactotron-vscode/package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-nx-vscode-
-
       - name: Production build
         run: NODE_ENV=production yarn nx build reactotron-vscode
 

@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core"
 import type { McpRedactionRules } from "reactotron-core-contract"
 
 export const REDACTED = "[REDACTED]"
@@ -72,8 +73,18 @@ export function createMcpServer(
   _config?: McpRedactionServerConfig
 ): ReactotronMcpServer {
   return {
-    start: () => Promise.reject(new Error("MCP server is disabled in Tauri runtime")),
-    stop: () => {},
+    start: async (port?: number) => {
+      if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+        return
+      }
+      await invoke("start_mcp_server", { port: port ?? 4567 })
+    },
+    stop: () => {
+      if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+        return
+      }
+      void invoke("stop_mcp_server")
+    },
     updateRedactionConfig: () => {},
   }
 }

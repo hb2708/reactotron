@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,12 +10,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch, Mutex, RwLock};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use uuid::Uuid;
 
+use crate::payload_store::PayloadStore;
+
 pub const DEFAULT_PORT: u16 = 9090;
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:9090";
+pub const LOOPBACK_V4_ADDR: &str = "127.0.0.1:9090";
 pub const LOOPBACK_V6_ADDR: &str = "[::1]:9090";
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 5 * 1024 * 1024;
 
@@ -61,6 +65,8 @@ pub struct OutboundCommandEvent {
     pub message_id: u64,
     pub payload: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_offloaded: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<Value>,
 }
 
@@ -87,10 +93,13 @@ pub struct ServerState {
     pub next_message_id: AtomicU64,
     pub sessions: RwLock<HashMap<String, ClientSession>>,
     pub subscriptions: RwLock<Vec<String>>,
+    pub payload_store: Arc<PayloadStore>,
 }
 
 impl ServerState {
     pub fn new(port: u16) -> Self {
+        let payload_store = PayloadStore::new_temp()
+            .expect("Failed to initialize temporary SQLite payload store");
         Self {
             status: RwLock::new(ServerStatus::Stopped),
             port: AtomicU64::new(port as u64),
@@ -99,6 +108,7 @@ impl ServerState {
             next_message_id: AtomicU64::new(0),
             sessions: RwLock::new(HashMap::new()),
             subscriptions: RwLock::new(Vec::new()),
+            payload_store: Arc::new(payload_store),
         }
     }
 
@@ -128,13 +138,36 @@ pub trait EventSink: Send + Sync {
     fn emit_command(&self, cmd: &OutboundCommandEvent);
 }
 
+const COMMAND_BATCH_WINDOW: Duration = Duration::from_millis(32);
+const COMMAND_BATCH_MAX_LEN: usize = 200;
+
 pub struct TauriEventSink {
     app: AppHandle,
+    command_tx: mpsc::UnboundedSender<OutboundCommandEvent>,
 }
 
 impl TauriEventSink {
     pub fn new(app: AppHandle) -> Self {
-        Self { app }
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel::<OutboundCommandEvent>();
+        let batch_app = app.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let mut batch: Vec<OutboundCommandEvent> = Vec::with_capacity(64);
+            while let Some(first) = command_rx.recv().await {
+                batch.push(first);
+                let deadline = tokio::time::Instant::now() + COMMAND_BATCH_WINDOW;
+                while batch.len() < COMMAND_BATCH_MAX_LEN {
+                    match tokio::time::timeout_at(deadline, command_rx.recv()).await {
+                        Ok(Some(cmd)) => batch.push(cmd),
+                        _ => break,
+                    }
+                }
+                let _ = batch_app.emit("reactotron://commands-batch", &batch);
+                batch.clear();
+            }
+        });
+
+        Self { app, command_tx }
     }
 }
 
@@ -156,7 +189,9 @@ impl EventSink for TauriEventSink {
     }
 
     fn emit_command(&self, cmd: &OutboundCommandEvent) {
-        let _ = self.app.emit("reactotron://command", cmd);
+        if self.command_tx.send(cmd.clone()).is_err() {
+            let _ = self.app.emit("reactotron://command", cmd);
+        }
     }
 }
 
@@ -198,28 +233,140 @@ pub fn repair_serialization(value: &mut Value) {
     }
 }
 
+pub struct ServerHandle {
+    lan_enabled: AtomicBool,
+    inner: Mutex<Option<(watch::Sender<bool>, Vec<JoinHandle<()>>)>>,
+}
+
+impl ServerHandle {
+    pub fn new(initial_lan_enabled: bool) -> Self {
+        Self {
+            lan_enabled: AtomicBool::new(initial_lan_enabled),
+            inner: Mutex::new(None),
+        }
+    }
+
+    pub fn is_lan_enabled(&self) -> bool {
+        self.lan_enabled.load(Ordering::Relaxed)
+    }
+
+    pub async fn start_with_mode(
+        &self,
+        lan_enabled: bool,
+        state: Arc<ServerState>,
+        sink: Arc<dyn EventSink>,
+    ) -> Result<SocketAddr, std::io::Error> {
+        self.lan_enabled.store(lan_enabled, Ordering::Relaxed);
+        let bind_addr = if lan_enabled {
+            DEFAULT_BIND_ADDR
+        } else {
+            LOOPBACK_V4_ADDR
+        };
+
+        let listener = match TcpListener::bind(bind_addr).await {
+            Ok(l) => l,
+            Err(err) => {
+                *state.status.write().await = ServerStatus::PortUnavailable;
+                sink.emit_port_unavailable();
+                return Err(err);
+            }
+        };
+
+        let local_addr = listener.local_addr()?;
+        state.port.store(local_addr.port() as u64, Ordering::Relaxed);
+        *state.status.write().await = ServerStatus::Started;
+        sink.emit_server_started();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut tasks = Vec::with_capacity(2);
+        tasks.push(spawn_accept_loop_with_shutdown(
+            listener,
+            Arc::clone(&state),
+            Arc::clone(&sink),
+            Some(shutdown_rx.clone()),
+        ));
+
+        match TcpListener::bind(LOOPBACK_V6_ADDR).await {
+            Ok(v6_listener) => tasks.push(spawn_accept_loop_with_shutdown(
+                v6_listener,
+                state,
+                sink,
+                Some(shutdown_rx),
+            )),
+            Err(err) => eprintln!("IPv6 loopback {LOOPBACK_V6_ADDR} unavailable: {err}"),
+        }
+
+        *self.inner.lock().await = Some((shutdown_tx, tasks));
+        Ok(local_addr)
+    }
+
+    pub async fn restart_with_mode(
+        &self,
+        lan_enabled: bool,
+        state: Arc<ServerState>,
+        sink: Arc<dyn EventSink>,
+    ) -> Result<SocketAddr, std::io::Error> {
+        let prev = self.inner.lock().await.take();
+        if let Some((tx, tasks)) = prev {
+            let _ = tx.send(true);
+            for task in tasks {
+                let _ = task.await;
+            }
+        }
+        self.start_with_mode(lan_enabled, state, sink).await
+    }
+}
+
+fn spawn_accept_loop_with_shutdown(
+    listener: TcpListener,
+    state: Arc<ServerState>,
+    sink: Arc<dyn EventSink>,
+    mut shutdown_rx: Option<watch::Receiver<bool>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let wait_shutdown = async {
+                match shutdown_rx.as_mut() {
+                    Some(rx) => {
+                        let res = rx.changed().await;
+                        res.is_err() || *rx.borrow()
+                    }
+                    None => std::future::pending::<bool>().await,
+                }
+            };
+
+            tokio::select! {
+                should_stop = wait_shutdown => {
+                    if should_stop {
+                        break;
+                    }
+                }
+                accept_res = listener.accept() => {
+                    match accept_res {
+                        Ok((stream, peer_addr)) => {
+                            let conn_state = Arc::clone(&state);
+                            let conn_sink = Arc::clone(&sink);
+                            tokio::spawn(async move {
+                                handle_connection(stream, peer_addr, conn_state, conn_sink).await;
+                            });
+                        }
+                        Err(err) => {
+                            eprintln!("WebSocket accept error: {err}");
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
 fn spawn_accept_loop(
     listener: TcpListener,
     state: Arc<ServerState>,
     sink: Arc<dyn EventSink>,
 ) {
-    tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((stream, peer_addr)) => {
-                    let conn_state = Arc::clone(&state);
-                    let conn_sink = Arc::clone(&sink);
-                    tokio::spawn(async move {
-                        handle_connection(stream, peer_addr, conn_state, conn_sink).await;
-                    });
-                }
-                Err(err) => {
-                    eprintln!("WebSocket accept error: {err}");
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            }
-        }
-    });
+    let _ = spawn_accept_loop_with_shutdown(listener, state, sink, None);
 }
 
 pub async fn start_on(
@@ -348,6 +495,7 @@ async fn handle_connection(
                         "maxBytes": max_bytes
                     }
                 }),
+                payload_offloaded: None,
                 diff: None,
             };
             sink.emit_command(&truncated_event);
@@ -457,6 +605,17 @@ async fn handle_connection(
             }
         }
 
+        let (emit_payload, payload_offloaded) = offload_payload_if_large(
+            &state.payload_store,
+            message_id,
+            active_client_id.as_deref(),
+            &command_type,
+            &date,
+            delta_time,
+            important,
+            payload,
+        );
+
         let cmd_event = OutboundCommandEvent {
             command_type,
             connection_id,
@@ -465,7 +624,8 @@ async fn handle_connection(
             delta_time,
             important,
             message_id,
-            payload,
+            payload: emit_payload,
+            payload_offloaded,
             diff,
         };
         sink.emit_command(&cmd_event);
@@ -493,6 +653,132 @@ async fn handle_connection(
     }
 
     let _ = writer_task.await;
+}
+
+const OFFLOAD_THRESHOLD_BYTES: usize = 512;
+
+fn is_offloadable_command(command_type: &str) -> bool {
+    matches!(
+        command_type,
+        "log"
+            | "display"
+            | "api.response"
+            | "benchmark.report"
+            | "asyncStorage.mutation"
+            | "state.action.complete"
+            | "image"
+    )
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max_chars).collect();
+        out.push_str("...");
+        out
+    }
+}
+
+fn build_compact_preview(command_type: &str, payload: &Value) -> Value {
+    match command_type {
+        "log" => {
+            let level = payload.get("level").cloned().unwrap_or(json!("debug"));
+            let preview = match payload.get("message") {
+                Some(Value::String(s)) => Value::String(truncate_str(s, 140)),
+                Some(other) => Value::String(truncate_str(&other.to_string(), 140)),
+                None => Value::String(String::new()),
+            };
+            json!({ "level": level, "message": preview })
+        }
+        "display" => {
+            let mut out = Map::new();
+            for k in ["name", "preview", "important"] {
+                if let Some(v) = payload.get(k) {
+                    out.insert(k.to_string(), v.clone());
+                }
+            }
+            if !out.contains_key("preview") {
+                if let Some(v) = payload.get("value") {
+                    out.insert("preview".to_string(), Value::String(truncate_str(&v.to_string(), 140)));
+                }
+            }
+            Value::Object(out)
+        }
+        "api.response" => {
+            let req = payload.get("request");
+            let res = payload.get("response");
+            json!({
+                "duration": payload.get("duration").cloned().unwrap_or(Value::Null),
+                "request": {
+                    "url": req.and_then(|r| r.get("url")).cloned().unwrap_or(Value::Null),
+                    "method": req.and_then(|r| r.get("method")).cloned().unwrap_or(Value::Null),
+                },
+                "response": {
+                    "status": res.and_then(|r| r.get("status")).cloned().unwrap_or(Value::Null),
+                }
+            })
+        }
+        "benchmark.report" => {
+            json!({
+                "title": payload.get("title").cloned().unwrap_or(Value::Null),
+                "steps": []
+            })
+        }
+        "asyncStorage.mutation" => {
+            json!({
+                "action": payload.get("action").cloned().unwrap_or(Value::Null),
+                "data": {}
+            })
+        }
+        "state.action.complete" => {
+            json!({
+                "name": payload.get("name").cloned().unwrap_or(Value::Null),
+                "ms": payload.get("ms").cloned().unwrap_or(Value::Null),
+            })
+        }
+        "image" => {
+            json!({
+                "caption": payload.get("caption").cloned().unwrap_or(Value::Null),
+                "filename": payload.get("filename").cloned().unwrap_or(Value::Null),
+            })
+        }
+        _ => json!({}),
+    }
+}
+
+fn offload_payload_if_large(
+    store: &PayloadStore,
+    message_id: u64,
+    client_id: Option<&str>,
+    command_type: &str,
+    date: &str,
+    delta_time: f64,
+    important: bool,
+    payload: Value,
+) -> (Value, Option<bool>) {
+    if !is_offloadable_command(command_type) {
+        return (payload, None);
+    }
+    let serialized = match serde_json::to_string(&payload) {
+        Ok(s) => s,
+        Err(_) => return (payload, None),
+    };
+    let stored_ok = store
+        .insert_event(
+            message_id,
+            client_id,
+            command_type,
+            date,
+            delta_time,
+            important,
+            &serialized,
+        )
+        .is_ok();
+    if serialized.len() <= OFFLOAD_THRESHOLD_BYTES || !stored_ok {
+        return (payload, None);
+    }
+    (build_compact_preview(command_type, &payload), Some(true))
 }
 
 fn build_connection_metadata(

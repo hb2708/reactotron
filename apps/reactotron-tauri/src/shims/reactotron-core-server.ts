@@ -11,21 +11,12 @@ import {
 type Handler = (...args: any[]) => void
 type ServerListener = CommandEvent | ((socket: { readyState: number }) => void)
 
-function cloneSafe<T>(value: T): T {
-  try {
-    return typeof structuredClone === "function"
-      ? structuredClone(value)
-      : JSON.parse(JSON.stringify(value))
-  } catch {
-    return value
-  }
-}
-
 function normalizeCommand(raw: IncomingCommandPayload) {
   const parsedDate = raw.date ? new Date(raw.date) : new Date()
+  const isOffloaded = Boolean(raw.payloadOffloaded)
   const repairedPayload =
-    raw.payload && typeof raw.payload === "object"
-      ? repairSerialization(cloneSafe(raw.payload))
+    !isOffloaded && raw.payload && typeof raw.payload === "object"
+      ? repairSerialization(raw.payload)
       : raw.payload
 
   return {
@@ -37,6 +28,7 @@ function normalizeCommand(raw: IncomingCommandPayload) {
     important: Boolean(raw.important),
     messageId: raw.messageId,
     payload: repairedPayload,
+    payloadOffloaded: isOffloaded,
     diff: raw.diff,
   }
 }
@@ -79,6 +71,11 @@ export default class Server {
         onConnectionEstablished: (conn) => this.emit("connectionEstablished", conn),
         onDisconnect: (conn) => this.emit("disconnect", conn),
         onCommand: (raw) => this.emit("command", normalizeCommand(raw)),
+        onCommandsBatch: (batch) => {
+          for (let i = 0; i < batch.length; i++) {
+            this.emit("command", normalizeCommand(batch[i]))
+          }
+        },
       })
 
       if (this.stopped) {

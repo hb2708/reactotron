@@ -8,6 +8,13 @@ const repoRoot = path.resolve(__dirname, "../..")
 const appRendererDir = path.resolve(__dirname, "../reactotron-app/src/renderer")
 const appImagesDir = path.resolve(appRendererDir, "images")
 const imagesShimPath = path.resolve(__dirname, "src/shims/images.ts")
+const useStandaloneSourcePath = path.resolve(
+  appRendererDir,
+  "contexts/Standalone/useStandalone"
+)
+const useStandaloneShimPath = path.resolve(__dirname, "src/shims/useStandalone.ts")
+const timelinePageDir = path.resolve(appRendererDir, "pages/timeline")
+const timelineShimPath = path.resolve(__dirname, "src/shims/Timeline.tsx")
 const helpPagePath = path.resolve(appRendererDir, "pages/help/index.tsx")
 
 function reactotronAppCompat(): Plugin {
@@ -21,6 +28,15 @@ function reactotronAppCompat(): Plugin {
       const resolved = path.resolve(path.dirname(cleanImporter), source)
       if (resolved === appImagesDir || resolved === path.join(appImagesDir, "index.ts")) {
         return imagesShimPath
+      }
+      if (
+        resolved === useStandaloneSourcePath ||
+        resolved === `${useStandaloneSourcePath}.ts`
+      ) {
+        return useStandaloneShimPath
+      }
+      if (resolved === timelinePageDir || resolved === path.join(timelinePageDir, "index.tsx")) {
+        return timelineShimPath
       }
       return null
     },

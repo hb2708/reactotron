@@ -36,6 +36,7 @@ export interface IncomingCommandPayload {
   important: boolean
   messageId: number
   payload: any
+  payloadOffloaded?: boolean
   diff?: any
 }
 
@@ -81,6 +82,29 @@ export async function setMaxPayloadBytes(maxBytes: number): Promise<void> {
   await invoke("set_max_payload_bytes", { maxBytes })
 }
 
+export async function getCommandPayload(messageId: number): Promise<any | null> {
+  if (!isTauriRuntime()) return null
+  return invoke<any | null>("get_command_payload", { messageId })
+}
+
+export async function clearPayloadStore(clientId?: string): Promise<void> {
+  if (!isTauriRuntime()) return
+  await invoke("clear_payload_store", { clientId: clientId ?? null })
+}
+
+export async function searchCommandPayloads(query: string, clientId?: string): Promise<number[]> {
+  if (!isTauriRuntime() || !query.trim()) return []
+  return invoke<number[]>("search_command_payloads", { query, clientId: clientId ?? null })
+}
+
+if (typeof window !== "undefined") {
+  ;(window as any).__REACTOTRON_TAURI_BRIDGE__ = {
+    getCommandPayload,
+    clearPayloadStore,
+    searchCommandPayloads,
+  }
+}
+
 export function copyText(text: string): void {
   if (isTauriRuntime()) {
     void writeClipboardText(text).catch(() => {
@@ -109,6 +133,7 @@ export async function subscribeServerEvents(handlers: {
   onConnectionEstablished: (conn: ReactotronConnection) => void
   onDisconnect: (conn: ReactotronConnection) => void
   onCommand: (cmd: IncomingCommandPayload) => void
+  onCommandsBatch?: (cmds: IncomingCommandPayload[]) => void
 }): Promise<() => void> {
   if (!isTauriRuntime()) return () => {}
 
@@ -122,6 +147,13 @@ export async function subscribeServerEvents(handlers: {
       handlers.onDisconnect(e.payload)
     ),
     listen<IncomingCommandPayload>("reactotron://command", (e) => handlers.onCommand(e.payload)),
+    listen<IncomingCommandPayload[]>("reactotron://commands-batch", (e) => {
+      if (handlers.onCommandsBatch) {
+        handlers.onCommandsBatch(e.payload)
+      } else {
+        e.payload.forEach((cmd) => handlers.onCommand(cmd))
+      }
+    }),
   ])
 
   return () => {

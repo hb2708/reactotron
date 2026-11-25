@@ -2,7 +2,7 @@
   "name": "reactotron-vscode",
   "displayName": "Reactotron",
   "description": "Drop-in Reactotron desktop inspector inside VS Code & Cursor powered by a dedicated worker thread",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "publisher": "hb2708",
   "private": true,
   "license": "MIT",

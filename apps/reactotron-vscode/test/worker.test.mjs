@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
 import net from "node:net"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -9,9 +10,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const workerPath = path.resolve(__dirname, "../dist/serverWorker.js")
 
 function createWorkerHarness(workerData) {
+  if (!fs.existsSync(workerPath)) {
+    throw new Error(`Worker bundle not found at ${workerPath}. Run "yarn build:ext" first.`)
+  }
   const worker = new Worker(workerPath, { workerData })
   const events = []
   const pending = new Map()
+  let workerError = null
   let reqId = 0
 
   worker.on("message", (msg) => {
@@ -29,6 +34,7 @@ function createWorkerHarness(workerData) {
   })
 
   worker.on("error", (err) => {
+    workerError = err
     for (const p of pending.values()) {
       clearTimeout(p.timer)
       p.reject(err)
@@ -37,6 +43,7 @@ function createWorkerHarness(workerData) {
   })
 
   function callWorker(action, payload = {}, timeoutMs = 5000) {
+    if (workerError) return Promise.reject(workerError)
     const requestId = ++reqId
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -49,11 +56,17 @@ function createWorkerHarness(workerData) {
   }
 
   function waitForEvent(predicate, timeoutMs = 3000) {
+    if (workerError) return Promise.reject(workerError)
     const existing = events.find(predicate)
     if (existing) return Promise.resolve(existing)
     return new Promise((resolve, reject) => {
       const started = Date.now()
       const timer = setInterval(() => {
+        if (workerError) {
+          clearInterval(timer)
+          reject(workerError)
+          return
+        }
         const found = events.find(predicate)
         if (found) {
           clearInterval(timer)
@@ -203,6 +216,21 @@ try {
     workerGeneration: 1,
   })
   assert.equal(clearedLookup, null)
+
+  // Large (>16 KB) state.backup.response must NOT be offloaded so snapshots preserve state
+  const bigSnapshot = { blob: "s".repeat(24 * 1024), ready: true }
+  ws.send(
+    JSON.stringify({
+      type: "state.backup.response",
+      payload: { state: bigSnapshot },
+    })
+  )
+  const backupBatch = await main.waitForEvent(
+    (e) => e.event === "commandsBatch" && e.batch.some((c) => c.type === "state.backup.response")
+  )
+  const backupCmd = backupBatch.batch.find((c) => c.type === "state.backup.response")
+  assert.equal(backupCmd.payloadOffloaded, false)
+  assert.equal(backupCmd.payload?.state?.ready, true)
 
   // 3. Outbound command round-trip
   const sentCount = await main.callWorker("sendCommand", {

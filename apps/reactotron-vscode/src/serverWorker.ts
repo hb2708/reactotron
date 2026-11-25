@@ -11,6 +11,7 @@ import {
 import { WebSocketServer, WebSocket, type RawData } from "ws"
 
 const PAYLOAD_OFFLOAD_BYTES = 16 * 1024
+const MAX_OFFLOAD_STORE_BYTES = 100 * 1024 * 1024
 const BATCH_WINDOW_MS = 32
 const MAX_BATCH_SIZE = 200
 
@@ -61,6 +62,7 @@ let wssV6: WebSocketServer | null = null
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let lifecycleQueue: Promise<void> = Promise.resolve()
+let panelAttached = workerData?.panelAttached !== false
 
 // Temp-file append-only payload offload store
 const payloadDbPath = path.join(
@@ -106,10 +108,13 @@ function storeOffloadedPayload(
   clientId: string | undefined,
   payload: unknown
 ): boolean {
-  if (payloadFd === null) return false
+  if (payloadFd === null || !panelAttached) return false
   try {
     const json = JSON.stringify(payload)
     const buf = Buffer.from(json, "utf8")
+    if (writeCursor + buf.length > MAX_OFFLOAD_STORE_BYTES) {
+      return false
+    }
     if (!writeFullBufferAt(payloadFd, buf, writeCursor)) {
       return false
     }
@@ -515,7 +520,8 @@ function attachSocket(socket: WebSocket, remoteAddress: string) {
     if (
       encodedLen > PAYLOAD_OFFLOAD_BYTES &&
       commandType !== "client.intro" &&
-      commandType !== "state.values.change"
+      commandType !== "state.values.change" &&
+      commandType !== "state.backup.response"
     ) {
       const stored = storeOffloadedPayload(messageId, meta.clientId, payload)
       outboundPayload = buildSlimPreview(commandType, payload, encodedLen, !stored)
@@ -567,6 +573,17 @@ async function stopServers() {
     clearInterval(keepAliveTimer)
     keepAliveTimer = null
   }
+  const activeSessions = Array.from(sessions.values())
+  sessions.clear()
+  customCommands.clear()
+  for (const session of activeSessions) {
+    post({ event: "disconnect", connection: session.metadata })
+    try {
+      session.socket.terminate()
+    } catch {
+      // ignore
+    }
+  }
   const closeTrackedSockets = (wss: WebSocketServer | null) => {
     if (!wss) return
     for (const sock of wss.clients) {
@@ -579,15 +596,6 @@ async function stopServers() {
   }
   closeTrackedSockets(wssV4)
   closeTrackedSockets(wssV6)
-  for (const session of sessions.values()) {
-    try {
-      session.socket.terminate()
-    } catch {
-      // ignore
-    }
-  }
-  sessions.clear()
-  customCommands.clear()
 
   const closeServer = (wss: WebSocketServer | null) =>
     new Promise<void>((resolve) => {
@@ -814,6 +822,11 @@ parentPort?.on("message", async (msg: any) => {
       case "setMaxPayloadBytes": {
         config.maxPayloadBytes = Math.max(1024, Number(msg.maxBytes))
         reply(true, config.maxPayloadBytes)
+        break
+      }
+      case "setPanelAttached": {
+        panelAttached = Boolean(msg.attached)
+        reply(true, panelAttached)
         break
       }
       case "restart": {

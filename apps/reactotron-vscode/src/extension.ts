@@ -160,6 +160,7 @@ function startWorker(context: vscode.ExtensionContext) {
       bindHost: requestedBindHost,
       maxPayloadBytes: Math.max(1, maxPayloadMB) * 1024 * 1024,
       workerGeneration: generation,
+      panelAttached: panel !== null,
     },
   })
 
@@ -341,6 +342,10 @@ function openInspectorPanel(context: vscode.ExtensionContext) {
   if (panel) {
     panel.reveal(vscode.ViewColumn.Beside)
     return
+  }
+
+  if (worker) {
+    void callWorker("setPanelAttached", { attached: true }).catch(() => {})
   }
 
   const webviewRoot = vscode.Uri.joinPath(context.extensionUri, "dist", "webview")
@@ -531,6 +536,8 @@ function openInspectorPanel(context: vscode.ExtensionContext) {
     }
     if (worker) {
       void callWorker("stopMcp").catch(() => {})
+      void callWorker("setPanelAttached", { attached: false }).catch(() => {})
+      void callWorker("clearPayloadStore").catch(() => {})
     }
   })
 }
@@ -627,20 +634,30 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        e.affectsConfiguration("reactotron.port") ||
-        e.affectsConfiguration("reactotron.bindHost") ||
-        e.affectsConfiguration("reactotron.maxPayloadMB")
-      ) {
-        const cfg = vscode.workspace.getConfiguration("reactotron")
+      const portChanged = e.affectsConfiguration("reactotron.port")
+      const bindHostChanged = e.affectsConfiguration("reactotron.bindHost")
+      const maxPayloadChanged = e.affectsConfiguration("reactotron.maxPayloadMB")
+      if (!portChanged && !bindHostChanged && !maxPayloadChanged) {
+        return
+      }
+
+      const cfg = vscode.workspace.getConfiguration("reactotron")
+      if (portChanged) {
         requestedPort = cfg.get<number>("port", 9090)
+      }
+      if (bindHostChanged) {
         requestedBindHost = cfg.get<string>("bindHost", "0.0.0.0")
-        const maxBytes = Math.max(1, cfg.get<number>("maxPayloadMB", 5)) * 1024 * 1024
-        if (!worker) {
-          updateStatusBar()
-          return
-        }
+      }
+      const maxBytes = Math.max(1, cfg.get<number>("maxPayloadMB", 5)) * 1024 * 1024
+
+      if (!worker) {
+        updateStatusBar()
+        return
+      }
+      if (maxPayloadChanged) {
         void callWorker("setMaxPayloadBytes", { maxBytes }).catch(() => {})
+      }
+      if (portChanged || bindHostChanged) {
         activeClientIds.clear()
         void callWorker("restart", {
           port: requestedPort,

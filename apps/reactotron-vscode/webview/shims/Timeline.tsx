@@ -40,6 +40,8 @@ const Container = styled.div`
   width: 100%;
 `
 const TimelineContainer = styled.div`
+  flex: 1;
+  min-height: 0;
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
@@ -127,13 +129,11 @@ function LazyTimelineRow({
   sendCommand,
   dispatchAction,
   openDispatchModal,
-  onLayoutChange,
 }: {
   command: any
   sendCommand: any
   dispatchAction: (action: any) => void
   openDispatchModal: any
-  onLayoutChange: () => void
 }) {
   const cacheKey = getCacheKey(command)
   const [hydratedPayload, setHydratedPayload] = useState<any>(() =>
@@ -147,14 +147,12 @@ function LazyTimelineRow({
   }, [cacheKey, command.payloadOffloaded])
 
   const handleClickCapture = useCallback(() => {
-    requestAnimationFrame(() => onLayoutChange())
     if (!command.payloadOffloaded || hydratedPayload !== undefined) return
     void getCommandPayload(command.messageId, command.workerGeneration).then((raw) => {
       if (raw != null) {
         const repaired = typeof raw === "object" ? repairSerialization(raw) : raw
         cacheHydratedPayload(cacheKey, command.clientId, repaired)
         setHydratedPayload(repaired)
-        requestAnimationFrame(() => onLayoutChange())
       }
     })
   }, [
@@ -164,7 +162,6 @@ function LazyTimelineRow({
     command.payloadOffloaded,
     command.workerGeneration,
     hydratedPayload,
-    onLayoutChange,
   ])
 
   const effectiveCommand = useMemo(
@@ -300,9 +297,6 @@ function Timeline() {
     estimateSize: () => 56,
     overscan: 8,
   })
-  const handleRowLayoutChange = useCallback(() => {
-    rowVirtualizer.measure()
-  }, [rowVirtualizer])
 
   const { searchString, handleInputChange, resetSearch } = useDebouncedSearchInput(
     search,
@@ -399,7 +393,6 @@ function Timeline() {
                     sendCommand={sendCommand}
                     dispatchAction={dispatchAction}
                     openDispatchModal={openDispatchModal}
-                    onLayoutChange={handleRowLayoutChange}
                   />
                 </div>
               )

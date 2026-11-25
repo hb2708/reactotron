@@ -62,6 +62,21 @@ function validateReadableSourcePath(resolvedPath: string): void {
   if (!ext || !ALLOWED_SOURCE_EXTENSIONS.has(ext)) {
     throw new Error(`Unsupported source file extension: .${ext || "none"}`)
   }
+  const folders = vscode.workspace.workspaceFolders
+  if (folders && folders.length > 0) {
+    const insideWorkspace = folders.some((folder) => {
+      let root = folder.uri.fsPath
+      try {
+        root = fs.realpathSync(root)
+      } catch {
+        // fall back to fsPath when folder symlink cannot be resolved
+      }
+      return resolvedPath === root || resolvedPath.startsWith(root + path.sep)
+    })
+    if (!insideWorkspace) {
+      throw new Error("Source file is outside open workspace folders")
+    }
+  }
 }
 
 function validateDeviceId(deviceId: string): string {
@@ -188,12 +203,22 @@ function startWorker(context: vscode.ExtensionContext) {
     }
   })
 
+  worker.on("error", (err) => {
+    currentStatus = "stopped"
+    activeConnectionsCount = 0
+    updateStatusBar()
+    void vscode.window.showWarningMessage(`Reactotron server worker error: ${err.message}`)
+  })
+
   worker.on("exit", () => {
     for (const pending of pendingRequests.values()) {
       pending.reject(new Error("Reactotron worker exited"))
     }
     pendingRequests.clear()
     worker = null
+    currentStatus = "stopped"
+    activeConnectionsCount = 0
+    updateStatusBar()
   })
 }
 
@@ -272,6 +297,7 @@ function getWebviewHtml(context: vscode.ExtensionContext, webview: vscode.Webvie
     `default-src 'none'`,
     `img-src ${webview.cspSource} data: blob:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
+    // Required by upstream reactotron-core-ui DispatchActionModal eval() when parsing actions
     `script-src ${webview.cspSource} 'unsafe-eval'`,
     `font-src ${webview.cspSource} data:`,
   ].join("; ")

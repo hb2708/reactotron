@@ -29552,42 +29552,6 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"reactotron-vscode@workspace:apps/reactotron-vscode":
-  version: 0.0.0-use.local
-  resolution: "reactotron-vscode@workspace:apps/reactotron-vscode"
-  dependencies:
-    "@tanstack/react-virtual": "npm:^3.14.28"
-    "@types/lodash.debounce": "npm:^4.0.9"
-    "@types/node": "npm:^20.11.30"
-    "@types/react": "npm:18.2.45"
-    "@types/react-dom": "npm:18.2.14"
-    "@types/vscode": "npm:^1.85.0"
-    "@types/ws": "npm:^8.5.8"
-    "@vitejs/plugin-react": "npm:^4.3.4"
-    "@vscode/vsce": "npm:^2.32.0"
-    color-interpolate: "npm:1.0.5"
-    esbuild: "npm:^0.21.5"
-    immer: "npm:^10.0.3"
-    lodash.debounce: "npm:^4.0.8"
-    react: "npm:18.2.0"
-    react-dom: "npm:18.2.0"
-    react-hotkeys: "npm:^2.0.0"
-    react-icons: "npm:^4.11.0"
-    react-modal: "npm:3.16.1"
-    react-motion: "npm:0.5.2"
-    react-router-dom: "npm:^6.18.0"
-    react-tooltip: "npm:4.5.1"
-    reactotron-core-contract: "workspace:*"
-    reactotron-core-ui: "workspace:*"
-    reactotron-mcp: "workspace:*"
-    rimraf: "npm:^5.0.5"
-    styled-components: "npm:^6.1.0"
-    typescript: "npm:^5.1.3"
-    vite: "npm:^5.4.11"
-    ws: "npm:^8.14.2"
-  languageName: unknown
-  linkType: soft
-
 "reactotron@workspace:.":
   version: 0.0.0-use.local
   resolution: "reactotron@workspace:."
@@ -31304,6 +31268,42 @@ __metadata:
   checksum: 10/5fa6393ff6ad25d8b4a38e9ba095481e498c8ebe5ab78481c1455146255a3d18ca37a6f936595cc671a6149134cdc295bbd2fa017620bdc73cbc7380634fa2fc
   languageName: node
   linkType: hard
+
+"sidecar-for-reactotron@workspace:apps/reactotron-vscode":
+  version: 0.0.0-use.local
+  resolution: "sidecar-for-reactotron@workspace:apps/reactotron-vscode"
+  dependencies:
+    "@tanstack/react-virtual": "npm:^3.14.28"
+    "@types/lodash.debounce": "npm:^4.0.9"
+    "@types/node": "npm:^20.11.30"
+    "@types/react": "npm:18.2.45"
+    "@types/react-dom": "npm:18.2.14"
+    "@types/vscode": "npm:^1.85.0"
+    "@types/ws": "npm:^8.5.8"
+    "@vitejs/plugin-react": "npm:^4.3.4"
+    "@vscode/vsce": "npm:^2.32.0"
+    color-interpolate: "npm:1.0.5"
+    esbuild: "npm:^0.21.5"
+    immer: "npm:^10.0.3"
+    lodash.debounce: "npm:^4.0.8"
+    react: "npm:18.2.0"
+    react-dom: "npm:18.2.0"
+    react-hotkeys: "npm:^2.0.0"
+    react-icons: "npm:^4.11.0"
+    react-modal: "npm:3.16.1"
+    react-motion: "npm:0.5.2"
+    react-router-dom: "npm:^6.18.0"
+    react-tooltip: "npm:4.5.1"
+    reactotron-core-contract: "workspace:*"
+    reactotron-core-ui: "workspace:*"
+    reactotron-mcp: "workspace:*"
+    rimraf: "npm:^5.0.5"
+    styled-components: "npm:^6.1.0"
+    typescript: "npm:^5.1.3"
+    vite: "npm:^5.4.11"
+    ws: "npm:^8.14.2"
+  languageName: unknown
+  linkType: soft
 
 "signal-exit@npm:^3.0.0, signal-exit@npm:^3.0.2, signal-exit@npm:^3.0.3, signal-exit@npm:^3.0.7":
   version: 3.0.7

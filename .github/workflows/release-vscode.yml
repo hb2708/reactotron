@@ -1,4 +1,4 @@
-name: Release Reactotron VS Code Extension
+name: Release Sidecar for Reactotron
 
 on:
   push:
@@ -44,15 +44,15 @@ jobs:
         run: NODE_ENV=production yarn nx build reactotron-vscode
 
       - name: Run integration tests
-        run: yarn workspace reactotron-vscode test
+        run: yarn --cwd apps/reactotron-vscode test
 
       - name: Package production VSIX
         run: NODE_ENV=production yarn --cwd apps/reactotron-vscode vsce package --no-dependencies
 
       - name: Verify production VSIX bundle
         run: |
-          ls -lh apps/reactotron-vscode/reactotron-vscode-*.vsix
-          if unzip -l apps/reactotron-vscode/reactotron-vscode-*.vsix | grep -E '\.map$'; then
+          ls -lh apps/reactotron-vscode/sidecar-for-reactotron-*.vsix
+          if unzip -l apps/reactotron-vscode/sidecar-for-reactotron-*.vsix | grep -E '\.map$'; then
             echo "Found unexpected sourcemap files in production VSIX"
             exit 1
           fi
@@ -73,8 +73,8 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Reactotron VS Code ${{ steps.meta.outputs.tag }}
-          files: apps/reactotron-vscode/reactotron-vscode-*.vsix
+          name: Sidecar for Reactotron ${{ steps.meta.outputs.tag }}
+          files: apps/reactotron-vscode/sidecar-for-reactotron-*.vsix
           generate_release_notes: true
           draft: false
           prerelease: false
@@ -83,10 +83,10 @@ jobs:
         if: env.VSCE_PAT != ''
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: yarn --cwd apps/reactotron-vscode vsce publish --no-dependencies -p "$VSCE_PAT"
+        run: yarn --cwd apps/reactotron-vscode vsce publish --packagePath sidecar-for-reactotron-*.vsix -p "$VSCE_PAT"
 
       - name: Publish to Open VSX
         if: env.OVSX_TOKEN != ''
         env:
           OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
-        run: yarn dlx ovsx publish apps/reactotron-vscode/reactotron-vscode-*.vsix -p "$OVSX_TOKEN"
+        run: yarn dlx ovsx publish apps/reactotron-vscode/sidecar-for-reactotron-*.vsix -p "$OVSX_TOKEN"

@@ -1,6 +1,8 @@
-# Reactotron for VS Code & Cursor
+# Sidecar for Reactotron
 
-Drop-in Reactotron inspector embedded directly inside VS Code and Cursor, reusing `reactotron-core-ui` and `apps/reactotron-app` renderer components with zero extra Electron/Chromium processes.
+> **Unofficial Extension:** This is an independent community extension built on the MIT-licensed [Reactotron](https://github.com/infinitered/reactotron) codebase. It is not affiliated with, endorsed by, or maintained by Infinite Red LLC.
+
+Unofficial Reactotron inspector embedded directly inside VS Code and Cursor, reusing `reactotron-core-ui` and `apps/reactotron-app` renderer components with zero extra Electron/Chromium processes.
 
 ## Features
 
@@ -15,9 +17,9 @@ Drop-in Reactotron inspector embedded directly inside VS Code and Cursor, reusin
 ### From VSIX
 
 ```bash
-code --install-extension reactotron-vscode-0.1.0.vsix
+code --install-extension sidecar-for-reactotron-0.1.5.vsix
 # or in Cursor:
-cursor --install-extension reactotron-vscode-0.1.0.vsix
+cursor --install-extension sidecar-for-reactotron-0.1.5.vsix
 ```
 
 Or in the Extensions sidebar, click `...` -> **Install from VSIX...** and select the `.vsix` file.
@@ -54,3 +56,7 @@ Or in the Extensions sidebar, click `...` -> **Install from VSIX...** and select
 2. Configure redaction rules and client permissions directly in the panel's MCP settings dialog.
 
 > **Lifecycle Note:** The `:9090` WebSocket inspector server stays running in the background when you close the Reactotron tab (so logs and connections keep flowing when `reactotron.autoStart` is enabled), whereas the MCP HTTP server stops when the Reactotron inspector tab is closed and starts again when toggled back on.
+
+## License
+
+MIT License. Based on [Reactotron](https://github.com/infinitered/reactotron) (Copyright Infinite Red LLC). See [LICENSE](./LICENSE) and [THIRD_PARTY_LICENSES.txt](./THIRD_PARTY_LICENSES.txt).

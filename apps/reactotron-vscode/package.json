@@ -1,8 +1,8 @@
 {
-  "name": "reactotron-vscode",
-  "displayName": "Reactotron",
-  "description": "Drop-in Reactotron desktop inspector inside VS Code & Cursor powered by a dedicated worker thread",
-  "version": "0.1.4",
+  "name": "sidecar-for-reactotron",
+  "displayName": "Sidecar for Reactotron",
+  "description": "Unofficial Reactotron inspector inside your editor. View logs, network, and state with zero extra Electron app — plus jump-to-source and MCP.",
+  "version": "0.1.5",
   "publisher": "hb2708",
   "private": true,
   "license": "MIT",

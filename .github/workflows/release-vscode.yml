@@ -1,0 +1,92 @@
+name: Release Sidecar for Reactotron
+
+on:
+  push:
+    tags:
+      - "vscode-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, Test & Release Production VSIX
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Cache Yarn cache
+        uses: actions/cache@v4
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-cache-
+
+      - name: Install dependencies
+        env:
+          SKIP_LIB_BUILD: "1"
+        run: yarn install --immutable
+
+      - name: Production build
+        run: NODE_ENV=production yarn nx build reactotron-vscode
+
+      - name: Run integration tests
+        run: yarn --cwd apps/reactotron-vscode test
+
+      - name: Package production VSIX
+        run: NODE_ENV=production yarn --cwd apps/reactotron-vscode vsce package --no-dependencies
+
+      - name: Verify production VSIX bundle
+        run: |
+          ls -lh apps/reactotron-vscode/sidecar-for-reactotron-*.vsix
+          if unzip -l apps/reactotron-vscode/sidecar-for-reactotron-*.vsix | grep -E '\.map$'; then
+            echo "Found unexpected sourcemap files in production VSIX"
+            exit 1
+          fi
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          else
+            VERSION="$(node -p "require('./apps/reactotron-vscode/package.json').version")"
+            RELEASE_TAG="vscode-v${VERSION}"
+          fi
+          echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Sidecar for Reactotron ${{ steps.meta.outputs.tag }}
+          files: apps/reactotron-vscode/sidecar-for-reactotron-*.vsix
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+      - name: Publish to VS Code Marketplace
+        if: env.VSCE_PAT != ''
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: yarn --cwd apps/reactotron-vscode vsce publish --packagePath sidecar-for-reactotron-*.vsix -p "$VSCE_PAT"
+
+      - name: Publish to Open VSX
+        if: env.OVSX_TOKEN != ''
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+        run: yarn dlx ovsx publish apps/reactotron-vscode/sidecar-for-reactotron-*.vsix -p "$OVSX_TOKEN"
